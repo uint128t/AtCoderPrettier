@@ -2,4 +2,5 @@
 
 1. Add acrylic effects.
 2. Support dark mode.
-3. Adjust text width.
+3. Support customized background.
+4. Adjust text width.
