@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         AtCoder 美化
-// @namespace    https://github.com/uint128t/LuoguRedirect
+// @namespace    https://github.com/uint128t/AtCoderPrettier
 // @version      6.0
 // @description  逻辑重构：区分原生浅色与交互浅色，实现“出身判定”，完美解决闪烁、卡死及恢复问题
 // @author       uint128t
