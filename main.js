@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AtCoder 美化
 // @namespace    https://github.com/uint128t/AtCoderPrettier
-// @version      6.0
-// @description  逻辑重构：区分原生浅色与交互浅色，实现“出身判定”，完美解决闪烁、卡死及恢复问题
+// @version      6.1
+// @description  逻辑重构：区分原生浅色与交互浅色，增加文字色相反转，完美解决闪烁及恢复问题
 // @author       uint128t
 // @match        *://*.atcoder.jp/*
 // @grant        GM_addStyle
@@ -20,10 +20,10 @@
     const acrylicAlpha = isFirefox ? 0.4 : 0.6;
 
     const darkBgColor = "rgb(30, 30, 30)";
-    const lightnessThreshold = 150;
+    const lightnessThreshold = 150; // 背景亮度阈值
+    const textLightnessThreshold = 128; // 文字亮度阈值 (0-255)
 
     // --- 1. CSS 样式注入 ---
-    // 这里的 CSS 只负责全局固定样式，不干预具体的按钮交互，留给 JS 去做智能判断
     GM_addStyle(`
         /* --- 全局背景 --- */
         body {
@@ -85,11 +85,7 @@
         .accept, .wrong-answer { color: #fff !important; }
     `);
 
-    // --- 2. JS 逻辑：智能颜色反转 ---
-
-    function isLightColor(r, g, b) {
-        return (r * 299 + g * 587 + b * 114) / 1000 > lightnessThreshold;
-    }
+    // --- 2. 辅助函数：颜色转换 ---
 
     function parseColor(colorStr) {
         if (!colorStr || colorStr === 'transparent' || colorStr === 'rgba(0, 0, 0, 0)') return null;
@@ -105,11 +101,57 @@
         return null;
     }
 
-    /**
-     * 核心处理函数
-     * @param el 元素
-     * @param isStaticCheck 是否为初始加载/新增节点 (决定是否打标记)
-     */
+    // RGB 转 HSL
+    function rgbToHsl(r, g, b) {
+        r /= 255, g /= 255, b /= 255;
+        let max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h, s, l = (max + min) / 2;
+
+        if (max === min) {
+            h = s = 0; // 灰度
+        } else {
+            let d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+                case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+                case g: h = ((b - r) / d + 2) / 6; break;
+                case b: h = ((r - g) / d + 4) / 6; break;
+            }
+        }
+        return { h: h * 360, s: s, l: l };
+    }
+
+    // HSL 转 RGB
+    function hslToRgb(h, s, l) {
+        let r, g, b;
+        h /= 360;
+
+        if (s === 0) {
+            r = g = b = l; // 灰度
+        } else {
+            function hue2rgb(p, q, t) {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1/6) return p + (q - p) * 6 * t;
+                if (t < 1/2) return q;
+                if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            }
+            let q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            let p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+    }
+
+    function isLightColor(r, g, b) {
+        return (r * 299 + g * 587 + b * 114) / 1000 > lightnessThreshold;
+    }
+
+    // --- 3. 核心处理逻辑 ---
+
     function processElement(el, isStaticCheck = false) {
         if (!el || el.nodeType !== 1) return;
 
@@ -128,35 +170,64 @@
 
         try {
             const style = window.getComputedStyle(el);
-            const bgColor = style.backgroundColor;
-            const rgb = parseColor(bgColor);
 
-            if (rgb && isLightColor(rgb.r, rgb.g, rgb.b)) {
-                // --- 应用深色样式 ---
+            // --- A. 背景处理 (原有逻辑) ---
+            const bgColor = style.backgroundColor;
+            const bgRgb = parseColor(bgColor);
+
+            if (bgRgb && isLightColor(bgRgb.r, bgRgb.g, bgRgb.b)) {
                 let newBg;
-                if (rgb.a < 1) {
-                    newBg = `rgba(30, 30, 30, ${rgb.a})`;
+                if (bgRgb.a < 1) {
+                    newBg = `rgba(30, 30, 30, ${bgRgb.a})`;
                 } else {
                     newBg = darkBgColor;
                 }
-
                 el.style.setProperty('background-color', newBg, 'important');
                 el.style.setProperty('border-color', '#444', 'important');
-                el.style.setProperty('color', '#e0e0e0', 'important');
+                // 注意：背景变深时，通常文字也需要调整，但这里先不强制，由下面的文字逻辑处理
 
-                // 核心：如果是静态检查（页面加载时），打上“出身浅色”的标记
                 if (isStaticCheck) {
                     el.dataset.acOriginallyLight = "true";
                 }
             }
+
+            // --- B. 文字颜色处理 (新增逻辑) ---
+            // 针对 span 或其他包含文字的元素，如果文字颜色过深，则提亮
+            // 这里的逻辑是：无论背景如何，只要文字太暗（亮度低），就提亮它
+            // 这样可以解决深色背景+深色文字的问题（虽然不常见，但逻辑更健壮）
+            const color = style.color;
+            const textRgb = parseColor(color);
+
+            if (textRgb) {
+                // 计算文字亮度 (0-1)
+                const hsl = rgbToHsl(textRgb.r, textRgb.g, textRgb.b);
+
+                // 如果亮度太低 (小于 0.5，即 128/255)，且不是纯白/浅色
+                // 这里的 textLightnessThreshold 映射到 0-1 范围约为 0.5
+                if (hsl.l < 0.5) {
+                    // 提亮：保持色相 H 和 饱和度 S，将亮度 L 提升到 0.7 左右
+                    // 这样深红变浅红，深蓝变浅蓝
+                    const newL = 0.75;
+                    const newRgb = hslToRgb(hsl.h, hsl.s, newL);
+
+                    el.style.setProperty('color', `rgb(${newRgb.r}, ${newRgb.g}, ${newRgb.b})`, 'important');
+
+                    // 打上标记，防止 mouseout 时被错误清除
+                    // 注意：这个标记会与背景标记共存，需在 mouseout 中精细处理
+                    if (isStaticCheck) {
+                        el.dataset.acTextAdjusted = "true";
+                    }
+                }
+            }
+
         } catch (e) {}
     }
 
-    // --- 3. 初始化与静态扫描 ---
+    // --- 4. 初始化与静态扫描 ---
     function scanAll(root = document.body) {
         const all = root.getElementsByTagName('*');
         for (let el of all) {
-            processElement(el, true); // true = 静态检查，打标记
+            processElement(el, true);
         }
     }
 
@@ -164,48 +235,54 @@
         mutations.forEach((mutation) => {
             mutation.addedNodes.forEach((node) => {
                 if (node.nodeType === 1) {
-                    processElement(node, true); // 新增节点视为静态检查
+                    processElement(node, true);
                     if (node.getElementsByTagName) scanAll(node);
                 }
             });
-            // 属性变化时，通常不需要重新打标记，只处理样式
             if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
                  processElement(mutation.target, false);
             }
         });
     });
 
-    // --- 4. 交互监听 ---
+    // --- 5. 交互监听 ---
 
-    // 鼠标移入：处理动态变化的浅色 (如 Hover 效果)
     document.addEventListener('mouseover', (e) => {
-        processElement(e.target, false); // false = 动态交互，不打标记
+        processElement(e.target, false);
     });
 
-    // 鼠标移出：智能恢复逻辑
     document.addEventListener('mouseout', (e) => {
         const el = e.target;
 
-        // 1. 防闪烁：如果鼠标还在元素内部(移到了子元素上)，不清理
+        // 防闪烁：如果鼠标还在元素内部
         if (el.matches(':hover')) return;
 
-        // 2. 核心逻辑：
-        // 如果元素被标记为 "acOriginallyLight"，说明它原本就是浅色的，必须一直保持深色，不能清理。
+        // 1. 如果元素原本背景就是浅色 (出身浅色)，永远不清理
         if (el.dataset && el.dataset.acOriginallyLight === "true") {
             return;
         }
 
-        // 3. 恢复逻辑：
-        // 如果走到这里，说明这个元素原本是深色的（比如深蓝按钮），只是因为 Hover 变白被 JS 强制改黑了。
-        // 现在鼠标走了，应该移除 JS 样式，让它恢复原生的深色。
+        // 2. 如果元素仅仅是文字被调整过 (出身深色文字)，也不清理颜色
+        //    这里的逻辑是：如果文字被提亮了，我们希望它保持提亮状态，不要恢复成深色看不见
+        //    只有当元素是“背景交互”型（原本深色背景，hover变浅），才需要恢复背景
+        if (el.dataset && el.dataset.acTextAdjusted === "true") {
+             // 仅恢复背景和边框，保留文字颜色
+             if (el.style.backgroundColor) {
+                 el.style.removeProperty('background-color');
+                 el.style.removeProperty('border-color');
+             }
+             return;
+        }
+
+        // 3. 完全恢复逻辑 (针对原本深色背景、深色文字，hover时变浅了的按钮等)
         if (el.style.backgroundColor) {
             el.style.removeProperty('background-color');
-            el.style.removeProperty('color');
+            el.style.removeProperty('color'); // 这里可以安全移除 color，因为它是随 hover 临时改变的
             el.style.removeProperty('border-color');
         }
     });
 
-    // --- 5. 启动 ---
+    // --- 6. 启动 ---
     function init() {
         scanAll();
         observer.observe(document.body, {
