@@ -32,7 +32,7 @@
             background-position: center !important;
             background-attachment: fixed !important;
             background-repeat: no-repeat !important;
-            color: #fff !important;
+            color: #101010 !important;
         }
         a { color: #90caf9 !important; }
         a:hover { color: #fff !important; }
