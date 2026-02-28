@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AtCoder 美化
 // @namespace    https://github.com/uint128t/AtCoderPrettier
-// @version      6.1
-// @description  逻辑重构：区分原生浅色与交互浅色，增加文字色相反转，完美解决闪烁及恢复问题
+// @version      6.2
+// @description  区分原生浅色与交互浅色，增加文字色相反转，解决闪烁及恢复问题
 // @author       uint128t
 // @match        *://*.atcoder.jp/*
 // @grant        GM_addStyle
@@ -83,6 +83,10 @@
         /* --- 状态颜色保护 --- */
         .label-success, .label-warning, .label-danger, .label-info,
         .accept, .wrong-answer { color: #fff !important; }
+
+        p#fixed-server-timer.contest-timer {
+            color: #000 !important;
+        }
     `);
 
     // --- 2. 辅助函数：颜色转换 ---
@@ -162,10 +166,9 @@
         const skipTags = ['html', 'head', 'title', 'meta', 'link', 'style', 'script', 'img', 'svg', 'path', 'br', 'hr', 'i', 'input', 'textarea', 'select'];
         if (skipTags.includes(tagName)) return;
 
-        // 2. 保护亚克力容器
+        // 2. 保护亚克力容器、时钟、状态标签
         if (className.includes('navbar') || className.includes('row')) return;
-
-        // 3. 保护状态标签
+        if (el.matches?.('p#fixed-server-timer.contest-timer')) return;
         if (["label-success", "label-warning", "label-danger", "label-info", "accept"].some(c => className.includes(c))) return;
 
         try {
@@ -223,7 +226,7 @@
         } catch (e) {}
     }
 
-    // --- 4. 初始化与静态扫描 ---
+    // --- 3. 初始化与静态扫描 ---
     function scanAll(root = document.body) {
         const all = root.getElementsByTagName('*');
         for (let el of all) {
@@ -245,7 +248,7 @@
         });
     });
 
-    // --- 5. 交互监听 ---
+    // --- 4. 交互监听 ---
 
     document.addEventListener('mouseover', (e) => {
         processElement(e.target, false);
@@ -282,7 +285,7 @@
         }
     });
 
-    // --- 6. 启动 ---
+    // --- 5. 启动 ---
     function init() {
         scanAll();
         observer.observe(document.body, {
